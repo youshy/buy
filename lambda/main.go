@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ses"
+	"github.com/aws/aws-sdk-go/service/sns"
 	"go.uber.org/zap"
 )
 
@@ -22,6 +24,9 @@ type config struct {
 	SoldOutString   string
 	AddToCardString string
 	SendEmailTo     string
+	Email           bool
+	SMS             bool
+	SendSMSTo       string
 	Session         *session.Session
 	Log             *zap.SugaredLogger
 }
@@ -34,6 +39,18 @@ func newConfig() config {
 		AddToCardString: os.Getenv("ADD_TO_CARD_STRING"),
 		SendEmailTo:     os.Getenv("SEND_EMAIL_TO"),
 	}
+
+	email, err := strconv.ParseBool(os.Getenv("EMAIL"))
+	if err != nil {
+		c.Log.Fatalf("Unable to parse EMAIL %v", err)
+	}
+	c.Email = email
+
+	sms, err := strconv.ParseBool(os.Getenv("SMS"))
+	if err != nil {
+		c.Log.Fatalf("Unable to parse SMS %v", err)
+	}
+	c.SMS = sms
 
 	logger, _ := zap.NewProduction()
 	defer logger.Sync() // flushing buffer?
@@ -53,13 +70,20 @@ func newConfig() config {
 	if c.AddToCardString == "" {
 		c.Log.Fatal("AddToCardString not set")
 	}
-	if c.SendEmailTo == "" {
-		c.Log.Fatal("SendEmailTo not set")
+	if c.Email {
+		if c.SendEmailTo == "" {
+			c.Log.Fatal("SendEmailTo not set")
+		}
+	}
+	if c.SMS {
+		if c.SendSMSTo == "" {
+			c.Log.Fatal("SendSMSTo not set")
+		}
 	}
 	return c
 }
 
-func (c *config) SubjectString() string {
+func (c *config) EmailSubjectString() string {
 	return fmt.Sprintf("%s is available again!", c.Product)
 }
 
@@ -98,6 +122,7 @@ func handleRequest() error {
 		soldOut   int
 		buttonRes []string
 		emailSent bool
+		smsSent   bool
 	)
 
 	// find SoldOut
@@ -117,14 +142,23 @@ func handleRequest() error {
 	})
 
 	if soldOut == 0 && len(buttonRes) > 0 {
-		ok := c.sendEmail()
-		if !ok {
-			return errors.New("Unable to send the email")
+		if c.Email {
+			ok := c.sendEmail()
+			if !ok {
+				return errors.New("Unable to send the email")
+			}
+			emailSent = true
 		}
-		emailSent = true
+		if c.SMS {
+			ok := c.sendSMS()
+			if !ok {
+				return errors.New("Unable to send the sms")
+			}
+			smsSent = true
+		}
 	}
 
-	c.Log.Infof("Checked the %s. Email status: %v (true - product is available, false - product is unavailablee", c.Product, emailSent)
+	c.Log.Infof("Checked the %s. Email [Enabled: %v]: %v SMS [Enabled: %v]: %v\n(true - product is available, false - product is unavailable", c.Product, c.Email, emailSent, c.SMS, smsSent)
 	return nil
 }
 
@@ -133,7 +167,7 @@ func (c *config) sendEmail() bool {
 
 	result, err := svc.SendEmail(c.buildEmail())
 	if err != nil {
-		c.handleErrors(err)
+		c.handleEmailErrors(err)
 		return false
 	}
 
@@ -151,7 +185,7 @@ func (c *config) buildEmail() *ses.SendEmailInput {
 		Message: &ses.Message{
 			Subject: &ses.Content{
 				Charset: aws.String("UTF-8"),
-				Data:    aws.String(c.SubjectString()),
+				Data:    aws.String(c.EmailSubjectString()),
 			},
 			Body: &ses.Body{
 				Text: &ses.Content{
@@ -167,7 +201,7 @@ func (c *config) buildEmail() *ses.SendEmailInput {
 	}
 }
 
-func (c *config) handleErrors(err error) {
+func (c *config) handleEmailErrors(err error) {
 	if aerr, ok := err.(awserr.Error); ok {
 		switch aerr.Code() {
 		case ses.ErrCodeMessageRejected:
@@ -186,4 +220,21 @@ func (c *config) handleErrors(err error) {
 	} else {
 		c.Log.Fatal(err)
 	}
+}
+
+func (c *config) sendSMS() bool {
+	svc := sns.New(c.Session)
+	params := &sns.PublishInput{
+		Message:     aws.String(c.BodyString()),
+		PhoneNumber: aws.String(c.SendSMSTo),
+	}
+
+	result, err := svc.Publish(params)
+	if err != nil {
+		c.Log.Fatalf("Error whilst sending SMS: %v", err)
+		return false
+	}
+
+	c.Log.Infof("Return from sms send: %v", result)
+	return true
 }
