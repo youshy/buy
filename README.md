@@ -14,6 +14,12 @@ The idea is, that this repo will contain a binary that will help me not to leave
 
 [ ] Facebook marketplace
 
+[ ] Custom pages
+
+## AWS?
+
+The `Lambda` folder covers the AWS Lambda-deployable service that will email whenever a product is available to buy.
+
 ## Notes:
 
 * `Reverb` uses some kind of graphql endpoint located [here](https://rql.reverb.com/graphql)
