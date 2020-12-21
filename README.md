@@ -18,7 +18,7 @@ The idea is, that this repo will contain a binary that will help me not to leave
 
 ## AWS?
 
-The `Lambda` folder covers the AWS Lambda-deployable service that will email whenever a product is available to buy.
+The `Lambda` folder covers the AWS Lambda-deployable service that will send an email and/or sms whenever a product is available to buy.
 
 ## Notes:
 
